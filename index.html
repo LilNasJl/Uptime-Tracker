@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PC Uptime & Power Monitor</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header / Navbar -->
+        <header class="navbar">
+            <div class="brand">
+                <div class="brand-logo">🖥️</div>
+                <div>
+                    <h1>PC Uptime &amp; Power Monitor</h1>
+                    <p class="subtitle">Multi-PC CLI Telemetry &bull; Turned ON &amp; OFF History</p>
+                </div>
+            </div>
+
+            <div class="nav-actions">
+                <div class="fleet-pill" id="fleet-pill">
+                    <span class="status-dot" id="fleet-dot"></span>
+                    <span id="fleet-summary-text">0 / 0 PCs Online</span>
+                </div>
+
+                <select id="pc-selector" class="pc-select" title="Filter by PC">
+                    <option value="all">🌐 All PCs (Fleet View)</option>
+                </select>
+
+                <button id="btn-refresh" class="btn btn-secondary">↻ Refresh</button>
+                <button id="btn-setup" class="btn btn-primary">+ Connect a PC</button>
+            </div>
+        </header>
+
+        <!-- Empty State Banner -->
+        <div id="empty-alert" class="alert-banner" style="display: none;">
+            <div>
+                <strong>No PCs have reported to this website yet!</strong><br>
+                On any PC, run: <code>php tracker.php setup</code> to set its name and website URL, then run <code>php tracker.php watch</code>.
+            </div>
+        </div>
+
+        <!-- Multi-PC Fleet Cards Section -->
+        <section class="fleet-section">
+            <div class="section-title-bar">
+                <h2>Connected PCs (<span id="pc-count-label">0</span>)</h2>
+                <span class="hint-text">Click a PC card to filter its history below</span>
+            </div>
+            <div class="pc-grid" id="pc-grid">
+                <!-- Populated by app.js -->
+            </div>
+        </section>
+
+        <!-- KPI Metrics Row -->
+        <section class="kpi-grid">
+            <div class="card kpi-card">
+                <div class="kpi-header">
+                    <span class="kpi-title">Viewing Filter</span>
+                    <span>🎯</span>
+                </div>
+                <div class="kpi-value text-accent" id="kpi-filter-name">All PCs</div>
+                <div class="kpi-caption" id="kpi-filter-sub">Showing combined telemetry</div>
+            </div>
+
+            <div class="card kpi-card">
+                <div class="kpi-header">
+                    <span class="kpi-title">Today's Uptime</span>
+                    <span>📅</span>
+                </div>
+                <div class="kpi-value" id="kpi-today-uptime">0s</div>
+                <div class="kpi-caption">Active runtime today</div>
+            </div>
+
+            <div class="card kpi-card">
+                <div class="kpi-header">
+                    <span class="kpi-title">Total Tracked Uptime</span>
+                    <span>⏱️</span>
+                </div>
+                <div class="kpi-value" id="kpi-total-uptime">0s</div>
+                <div class="kpi-caption" id="kpi-total-sessions">0 total sessions</div>
+            </div>
+
+            <div class="card kpi-card">
+                <div class="kpi-header">
+                    <span class="kpi-title">Power Reliability</span>
+                    <span>⚡</span>
+                </div>
+                <div class="kpi-value" id="kpi-dirty-count">0</div>
+                <div class="kpi-caption">Unexpected / dirty shutdowns</div>
+            </div>
+        </section>
+
+        <!-- 7-Day Activity Bar Chart -->
+        <section class="card chart-card">
+            <div class="card-header">
+                <div>
+                    <h2>Last 7 Days Uptime (<span id="chart-scope-label">All PCs</span>)</h2>
+                    <p class="section-desc">Daily total hours of PC runtime</p>
+                </div>
+                <span class="badge badge-info">Hours / Day</span>
+            </div>
+            <div class="chart-container">
+                <div class="chart-bars" id="chart-bars"></div>
+            </div>
+        </section>
+
+        <!-- Power Sessions Table -->
+        <section class="card table-card">
+            <div class="card-header">
+                <div>
+                    <h2>Turned ON &amp; OFF Session History</h2>
+                    <p class="section-desc">Exact boot and shutdown logs received from each PC's CLI</p>
+                </div>
+                <span class="badge" id="sessions-badge">0 Sessions</span>
+            </div>
+
+            <div class="table-responsive">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>PC Name</th>
+                            <th>Status</th>
+                            <th>Turned ON (Boot)</th>
+                            <th>Turned OFF (Shutdown)</th>
+                            <th>Session Uptime</th>
+                            <th>Shutdown Type</th>
+                        </tr>
+                    </thead>
+                    <tbody id="sessions-tbody">
+                        <tr>
+                            <td colspan="6" class="empty-state">Loading telemetry...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <footer class="app-footer">
+            Pure PHP + CSS + Vanilla JS &bull; Ready for Hostinger &bull; Auto-updates every 10s
+        </footer>
+    </div>
+
+    <!-- Modal: How to Connect Any PC -->
+    <div id="setup-modal" class="modal-backdrop" style="display: none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>How to Connect Any PC to This Website</h3>
+                <button id="modal-close" class="modal-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>Copy the single file <code>cli/tracker.php</code> to any PC you want to monitor.</p>
+
+                <h4>Step 1: Set the PC Name &amp; Website URL (One-Time Setup)</h4>
+                <p class="tip">Run this command on the PC to save its custom name and your Hostinger URL into <code>config.json</code>:</p>
+                <div class="code-box">
+                    <code id="cmd-setup-example">php tracker.php setup --name="Office-PC-1" --api="https://yourdomain.com/api.php"</code>
+                </div>
+
+                <h4>Step 2: Sync Past Boot/Shutdown Logs &amp; Start Live Tracking</h4>
+                <div class="code-box">
+                    <code>php tracker.php watch</code>
+                </div>
+                <p class="tip">This automatically syncs the PC's Windows Event Log (Turned ON/OFF history) and sends a live heartbeat every 60 seconds.</p>
+
+                <h4>Step 3: Run Automatically When the PC Turns ON (Windows Task)</h4>
+                <p class="tip">Or simply run this command once on that PC so it runs silently in the background on every boot:</p>
+                <div class="code-box">
+                    <code>php tracker.php install-startup</code>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
