@@ -5,7 +5,18 @@
  * Features: Auto-migrations, pagination (20 rows default), deletion, and real-time telemetry.
  */
 
-require_once __DIR__ . '/config.php';
+if (file_exists(__DIR__ . '/config.php')) {
+    require_once __DIR__ . '/config.php';
+}
+
+// Fallback defaults if config.php is missing
+if (!defined('API_SECRET_KEY')) define('API_SECRET_KEY', '');
+if (!defined('ONLINE_THRESHOLD_SECONDS')) define('ONLINE_THRESHOLD_SECONDS', 180);
+if (!defined('DB_DRIVER')) define('DB_DRIVER', 'sqlite');
+if (!defined('SQLITE_DB_PATH')) define('SQLITE_DB_PATH', __DIR__ . '/data/uptime.db');
+if (!date_default_timezone_get() || date_default_timezone_get() === 'UTC') {
+    date_default_timezone_set('Asia/Manila');
+}
 
 header('Content-Type: application/json; charset=utf-8');
 header('Access-Control-Allow-Origin: *');
