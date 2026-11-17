@@ -2,6 +2,7 @@
 /**
  * PC Uptime Tracker - Central Website API (Hostinger Ready)
  * Pure PHP (No frameworks). Supports multiple PCs with custom names.
+ * Features: Auto-migrations, pagination (20 rows default), deletion, and real-time telemetry.
  */
 
 require_once __DIR__ . '/config.php';
@@ -11,7 +12,9 @@ header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Authorization, X-API-Key');
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+$requestMethod = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+
+if ($requestMethod === 'OPTIONS') {
     http_response_code(200);
     exit();
 }
@@ -34,8 +37,9 @@ try {
     jsonResponse(['success' => false, 'error' => 'Database error: ' . $e->getMessage()], 500);
 }
 
-// Initialize Schema
+// Initialize Schema and Run Migrations
 initDatabase($pdo);
+runMigrations($pdo);
 
 // Parse request
 $action = $_GET['action'] ?? '';
@@ -46,7 +50,7 @@ if (empty($action) && isset($inputData['action'])) {
 }
 
 // Verify API Secret Key on POST requests (if configured in config.php)
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && API_SECRET_KEY !== '') {
+if ($requestMethod === 'POST' && API_SECRET_KEY !== '') {
     $providedKey = $_SERVER['HTTP_X_API_KEY'] ?? ($inputData['api_key'] ?? ($_GET['api_key'] ?? ''));
     if ($providedKey !== API_SECRET_KEY) {
         jsonResponse(['success' => false, 'error' => 'Unauthorized: Invalid API Key'], 401);
@@ -67,6 +71,7 @@ switch ($action) {
         break;
 
     case 'dashboard':
+    case 'status':
         handleDashboard($pdo);
         break;
 
@@ -74,8 +79,12 @@ switch ($action) {
         jsonResponse(['success' => true, 'devices' => getAllDevices($pdo)]);
         break;
 
-    case 'status':
-        handleDashboard($pdo);
+    case 'delete_pc':
+        handleDeletePc($pdo, $inputData);
+        break;
+
+    case 'reset_all':
+        handleResetAll($pdo);
         break;
 
     default:
@@ -85,10 +94,12 @@ switch ($action) {
             'flow'      => 'CLI (Any PC) -> Website API (Hostinger)',
             'time'      => date('Y-m-d H:i:s'),
             'endpoints' => [
-                'POST ?action=heartbeat' => 'Receive live uptime & status from a PC CLI',
-                'POST ?action=sync'      => 'Receive boot/shutdown history from a PC CLI',
-                'POST ?action=offline'   => 'Mark a PC as turned off / offline immediately',
-                'GET  ?action=dashboard' => 'Fetch all PCs, stats, and session history for the Web UI'
+                'POST ?action=heartbeat'  => 'Receive live uptime & status from a PC CLI',
+                'POST ?action=sync'       => 'Receive boot/shutdown history from a PC CLI',
+                'POST ?action=offline'    => 'Mark a PC as turned off / offline immediately',
+                'GET  ?action=dashboard'  => 'Fetch all PCs, stats, and paginated session history',
+                'GET  ?action=delete_pc'  => 'Remove a specific PC (?pc=NAME)',
+                'GET  ?action=reset_all'  => 'Wipe all database records for a clean slate'
             ]
         ]);
         break;
@@ -157,6 +168,30 @@ function initDatabase(PDO $pdo) {
             CREATE INDEX IF NOT EXISTS idx_sessions_pc ON sessions(pc_name);
             CREATE INDEX IF NOT EXISTS idx_sessions_boot ON sessions(boot_time);
         ");
+    }
+}
+
+/**
+ * Automated migrations (Removes legacy/default test PCs)
+ */
+function runMigrations(PDO $pdo) {
+    try {
+        // Migration: Purge legacy default dummy test PCs
+        $legacyNames = ['Main-Workstation', 'Office-PC-02', 'Reception-PC'];
+        $inClause = "'" . implode("','", $legacyNames) . "'";
+
+        $stmtCheck = $pdo->query("SELECT COUNT(*) FROM devices WHERE pc_name IN ({$inClause})");
+        $legacyCount = (int)$stmtCheck->fetchColumn();
+
+        if ($legacyCount > 0) {
+            $pdo->exec("DELETE FROM devices WHERE pc_name IN ({$inClause})");
+            $pdo->exec("DELETE FROM sessions WHERE pc_name IN ({$inClause})");
+            if (DB_DRIVER !== 'mysql') {
+                @$pdo->exec("VACUUM");
+            }
+        }
+    } catch (Exception $e) {
+        // Silently continue if tables are still fresh
     }
 }
 
@@ -288,11 +323,52 @@ function handleOffline(PDO $pdo, array $data) {
 }
 
 /**
- * Return complete multi-PC dashboard payload
+ * Delete a specific PC and its history
+ */
+function handleDeletePc(PDO $pdo, array $data) {
+    $pcName = trim($_GET['pc'] ?? ($data['pc_name'] ?? ''));
+    if (empty($pcName)) {
+        jsonResponse(['success' => false, 'error' => 'pc_name is required'], 400);
+    }
+
+    $stmt1 = $pdo->prepare("DELETE FROM devices WHERE pc_name = :pc");
+    $stmt1->execute([':pc' => $pcName]);
+
+    $stmt2 = $pdo->prepare("DELETE FROM sessions WHERE pc_name = :pc");
+    $stmt2->execute([':pc' => $pcName]);
+
+    jsonResponse([
+        'success' => true,
+        'message' => "PC [{$pcName}] was removed successfully"
+    ]);
+}
+
+/**
+ * Reset all tracked PCs and sessions (Clean slate)
+ */
+function handleResetAll(PDO $pdo) {
+    $pdo->exec("DELETE FROM devices");
+    $pdo->exec("DELETE FROM sessions");
+    if (DB_DRIVER !== 'mysql') {
+        @$pdo->exec("VACUUM");
+    }
+
+    jsonResponse([
+        'success' => true,
+        'message' => "All PCs and history have been cleared."
+    ]);
+}
+
+/**
+ * Return complete multi-PC dashboard payload with 20-row default pagination
  */
 function handleDashboard(PDO $pdo) {
     $selectedPc = trim($_GET['pc'] ?? ($_GET['hostname'] ?? 'all'));
     if ($selectedPc === '') $selectedPc = 'all';
+
+    // Pagination Parameters: default 20 rows per page
+    $limit = min(100, max(1, (int)($_GET['limit'] ?? 20)));
+    $page  = max(1, (int)($_GET['page'] ?? 1));
 
     $devices = getAllDevices($pdo);
     $onlineCount = 0;
@@ -305,17 +381,29 @@ function handleDashboard(PDO $pdo) {
     $whereClause = $hasFilter ? "WHERE pc_name = :pc" : "";
     $andClause   = $hasFilter ? "AND pc_name = :pc" : "";
 
-    // Sessions list
-    $limit = min(100, max(1, (int)($_GET['limit'] ?? 50)));
+    // Total matching sessions count for pagination
+    $stmtCount = $pdo->prepare("SELECT COUNT(*) FROM sessions {$whereClause}");
+    if ($hasFilter) $stmtCount->execute([':pc' => $selectedPc]); else $stmtCount->execute();
+    $totalMatchingSessions = (int)$stmtCount->fetchColumn();
+
+    $totalPages = max(1, (int)ceil($totalMatchingSessions / $limit));
+    if ($page > $totalPages && $totalMatchingSessions > 0) {
+        $page = $totalPages;
+    }
+    $offset = ($page - 1) * $limit;
+
+    // Paginated Sessions list
     $sqlSessions = "
         SELECT id, pc_name, boot_time, shutdown_time, duration_seconds, shutdown_type, is_current, updated_at
         FROM sessions
         {$whereClause}
         ORDER BY boot_time DESC
-        LIMIT {$limit}
+        LIMIT :limit OFFSET :offset
     ";
     $stmtSess = $pdo->prepare($sqlSessions);
-    if ($hasFilter) $stmtSess->bindValue(':pc', $selectedPc);
+    if ($hasFilter) $stmtSess->bindValue(':pc', $selectedPc, PDO::PARAM_STR);
+    $stmtSess->bindValue(':limit', $limit, PDO::PARAM_INT);
+    $stmtSess->bindValue(':offset', $offset, PDO::PARAM_INT);
     $stmtSess->execute();
     $sessions = $stmtSess->fetchAll();
 
@@ -340,10 +428,6 @@ function handleDashboard(PDO $pdo) {
     // Aggregated Statistics
     $todayStart = date('Y-m-d 00:00:00');
     $sevenDaysAgo = date('Y-m-d 00:00:00', strtotime('-6 days'));
-
-    $stmtCount = $pdo->prepare("SELECT COUNT(*) FROM sessions {$whereClause}");
-    if ($hasFilter) $stmtCount->execute([':pc' => $selectedPc]); else $stmtCount->execute();
-    $totalSessions = (int)$stmtCount->fetchColumn();
 
     $stmtTotalUp = $pdo->prepare("SELECT SUM(duration_seconds) FROM sessions {$whereClause}");
     if ($hasFilter) $stmtTotalUp->execute([':pc' => $selectedPc]); else $stmtTotalUp->execute();
@@ -407,8 +491,18 @@ function handleDashboard(PDO $pdo) {
             'offline_pcs'  => count($devices) - $onlineCount
         ],
         'devices'      => $devices,
+        'pagination'   => [
+            'page'          => $page,
+            'limit'         => $limit,
+            'total_records' => $totalMatchingSessions,
+            'total_pages'   => $totalPages,
+            'has_prev'      => ($page > 1),
+            'has_next'      => ($page < $totalPages),
+            'start_index'   => $totalMatchingSessions > 0 ? $offset + 1 : 0,
+            'end_index'     => min($totalMatchingSessions, $offset + count($sessions))
+        ],
         'stats'        => [
-            'total_sessions'         => $totalSessions,
+            'total_sessions'         => $totalMatchingSessions,
             'total_uptime_seconds'   => $totalUptimeSeconds,
             'total_uptime_formatted' => formatDuration($totalUptimeSeconds),
             'today_uptime_seconds'   => $todayUptimeSeconds,

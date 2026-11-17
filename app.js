@@ -1,10 +1,14 @@
 /**
  * PC Uptime & Power Monitor - Pure Vanilla JS Frontend
- * Connects to api.php and renders multi-PC telemetry, live ticking timers, and history.
+ * Connects to api.php and renders multi-PC telemetry, live ticking timers,
+ * 20-row default paginated history, and interactive filtering.
  */
 
 const API_URL = 'api.php';
 let selectedPc = 'all';
+let currentPage = 1;
+let perPage = 20;
+let totalPages = 1;
 let currentDevices = [];
 let tickInterval = null;
 
@@ -12,10 +16,10 @@ document.addEventListener('DOMContentLoaded', () => {
     initControls();
     fetchDashboard();
 
-    // Poll backend every 10 seconds
+    // Poll backend every 10 seconds for real-time telemetry updates
     setInterval(fetchDashboard, 10000);
 
-    // Tick online PC uptimes every 1 second
+    // Tick online PC uptimes second-by-second
     tickInterval = setInterval(tickLiveUptimes, 1000);
 });
 
@@ -23,6 +27,7 @@ function initControls() {
     const selector = document.getElementById('pc-selector');
     selector.addEventListener('change', (e) => {
         selectedPc = e.target.value;
+        currentPage = 1;
         fetchDashboard();
     });
 
@@ -30,9 +35,48 @@ function initControls() {
         fetchDashboard();
     });
 
+    // Rows per page dropdown (10, 20, 50, 100)
+    const perPageSelect = document.getElementById('per-page-select');
+    if (perPageSelect) {
+        perPageSelect.addEventListener('change', (e) => {
+            perPage = parseInt(e.target.value, 10) || 20;
+            currentPage = 1;
+            fetchDashboard();
+        });
+    }
+
+    // Pagination navigation buttons
+    document.getElementById('btn-page-first').addEventListener('click', () => {
+        if (currentPage !== 1) {
+            currentPage = 1;
+            fetchDashboard();
+        }
+    });
+
+    document.getElementById('btn-page-prev').addEventListener('click', () => {
+        if (currentPage > 1) {
+            currentPage--;
+            fetchDashboard();
+        }
+    });
+
+    document.getElementById('btn-page-next').addEventListener('click', () => {
+        if (currentPage < totalPages) {
+            currentPage++;
+            fetchDashboard();
+        }
+    });
+
+    document.getElementById('btn-page-last').addEventListener('click', () => {
+        if (currentPage !== totalPages) {
+            currentPage = totalPages;
+            fetchDashboard();
+        }
+    });
+
+    // Modal instructions
     const modal = document.getElementById('setup-modal');
     document.getElementById('btn-setup').addEventListener('click', () => {
-        // Auto-fill current website URL into the setup command example
         const baseUrl = window.location.origin + window.location.pathname.replace(/\/index\.html$/i, '').replace(/\/$/, '');
         document.getElementById('cmd-setup-example').textContent =
             `php tracker.php setup --name="Office-PC-1" --api="${baseUrl}/api.php"`;
@@ -50,7 +94,8 @@ function initControls() {
 
 async function fetchDashboard() {
     try {
-        const res = await fetch(`${API_URL}?action=dashboard&pc=${encodeURIComponent(selectedPc)}`);
+        const url = `${API_URL}?action=dashboard&pc=${encodeURIComponent(selectedPc)}&page=${currentPage}&limit=${perPage}`;
+        const res = await fetch(url);
         const data = await res.json();
         if (!data.success) return;
 
@@ -60,7 +105,13 @@ async function fetchDashboard() {
         renderPcGrid(currentDevices);
         renderKpis(data.stats, currentDevices);
         renderChart(data.stats ? data.stats.daily_history : []);
-        renderSessionsTable(data.sessions || []);
+
+        if (data.pagination) {
+            currentPage = data.pagination.page;
+            totalPages = data.pagination.total_pages;
+        }
+
+        renderSessionsTable(data.sessions || [], data.pagination || null);
     } catch (err) {
         console.error('Failed to fetch dashboard data:', err);
     }
@@ -100,7 +151,7 @@ function renderFleetHeader(fleet, devices) {
 function renderPcGrid(devices) {
     const grid = document.getElementById('pc-grid');
     if (!devices || devices.length === 0) {
-        grid.innerHTML = '<div class="card" style="grid-column: 1/-1; text-align:center; color:var(--text-muted);">No PCs registered yet. Run the CLI on a PC to connect it.</div>';
+        grid.innerHTML = '<div class="card" style="grid-column: 1/-1; text-align:center; color:var(--text-muted); padding:28px;">No PCs registered yet. Run <code>php tracker.php setup</code> on a PC to connect it.</div>';
         return;
     }
 
@@ -127,7 +178,10 @@ function renderPcGrid(devices) {
                     <div class="pc-name">
                         <span>🖥️ ${escapeHtml(dev.pc_name)}</span>
                     </div>
-                    ${statusBadge}
+                    <div class="pc-actions">
+                        ${statusBadge}
+                        <button class="pc-delete-btn" title="Remove ${escapeHtml(dev.pc_name)}" onclick="deletePc('${escapeJs(dev.pc_name)}', event)">✕</button>
+                    </div>
                 </div>
                 <div class="pc-uptime-live" id="pc-live-up-${idx}">
                     ${uptimeDisplay}
@@ -158,12 +212,35 @@ function tickLiveUptimes() {
 
 function selectPcFilter(pcName) {
     if (selectedPc === pcName) {
-        selectedPc = 'all'; // Toggle back to All PCs if clicked again
+        selectedPc = 'all';
     } else {
         selectedPc = pcName;
     }
+    currentPage = 1;
     document.getElementById('pc-selector').value = selectedPc;
     fetchDashboard();
+}
+
+async function deletePc(pcName, event) {
+    if (event) event.stopPropagation();
+    if (!confirm(`Are you sure you want to remove [${pcName}] from the dashboard?`)) {
+        return;
+    }
+    try {
+        const res = await fetch(`${API_URL}?action=delete_pc&pc=${encodeURIComponent(pcName)}`);
+        const data = await res.json();
+        if (data.success) {
+            if (selectedPc === pcName) {
+                selectedPc = 'all';
+            }
+            currentPage = 1;
+            fetchDashboard();
+        } else {
+            alert('Failed to remove PC: ' + (data.error || 'Unknown error'));
+        }
+    } catch (err) {
+        console.error('Error removing PC:', err);
+    }
 }
 
 function renderKpis(stats, devices) {
@@ -213,58 +290,83 @@ function renderChart(history) {
     container.innerHTML = html;
 }
 
-function renderSessionsTable(sessions) {
+function renderSessionsTable(sessions, pagination) {
     const tbody = document.getElementById('sessions-tbody');
     const badge = document.getElementById('sessions-badge');
 
-    badge.textContent = `${sessions.length} Sessions`;
+    const totalRecords = pagination ? pagination.total_records : sessions.length;
+    badge.textContent = `${totalRecords} Sessions`;
 
     if (sessions.length === 0) {
         tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No sessions recorded for this filter.</td></tr>';
-        return;
+    } else {
+        let html = '';
+        sessions.forEach((s) => {
+            let statusBadge = '';
+            let shutdownCol = s.shutdown_time ? escapeHtml(s.shutdown_time) : '<span style="color:var(--text-muted)">--</span>';
+            let typeBadge = '';
+
+            if (Number(s.is_current) === 1 || s.shutdown_type === 'active') {
+                statusBadge = '<span class="badge badge-success">🟢 Running</span>';
+                shutdownCol = '<span style="color:var(--success); font-weight:600;">Active Now</span>';
+                typeBadge = '<span class="badge badge-success">Turned ON</span>';
+            } else if (s.shutdown_type === 'shutdown_dirty') {
+                statusBadge = '<span class="badge badge-danger">💥 Crash / Cut</span>';
+                typeBadge = '<span class="badge badge-danger">Unexpected Power Loss</span>';
+            } else if (s.shutdown_type === 'offline_timeout') {
+                statusBadge = '<span class="badge badge-warning">🔴 Offline</span>';
+                typeBadge = '<span class="badge badge-warning">Heartbeat Stopped</span>';
+            } else if (s.shutdown_type === 'shutdown_requested') {
+                statusBadge = '<span class="badge badge-info">⏹️ Turned OFF</span>';
+                typeBadge = '<span class="badge badge-info">User Shutdown / Restart</span>';
+            } else {
+                statusBadge = '<span class="badge">⏹️ Turned OFF</span>';
+                typeBadge = '<span class="badge">Clean OS Shutdown</span>';
+            }
+
+            html += `
+                <tr>
+                    <td>
+                        <span class="pc-tag" onclick="selectPcFilter('${escapeJs(s.pc_name)}')">
+                            🖥️ ${escapeHtml(s.pc_name)}
+                        </span>
+                    </td>
+                    <td>${statusBadge}</td>
+                    <td class="font-mono">${escapeHtml(s.boot_time)}</td>
+                    <td class="font-mono">${shutdownCol}</td>
+                    <td class="font-mono"><strong>${escapeHtml(s.duration_formatted)}</strong></td>
+                    <td>${typeBadge}</td>
+                </tr>
+            `;
+        });
+        tbody.innerHTML = html;
     }
 
-    let html = '';
-    sessions.forEach((s) => {
-        let statusBadge = '';
-        let shutdownCol = s.shutdown_time ? escapeHtml(s.shutdown_time) : '<span style="color:var(--text-muted)">--</span>';
-        let typeBadge = '';
+    // Update pagination controls
+    if (pagination) {
+        const infoEl = document.getElementById('pagination-info');
+        const displayEl = document.getElementById('page-display');
+        const btnFirst = document.getElementById('btn-page-first');
+        const btnPrev  = document.getElementById('btn-page-prev');
+        const btnNext  = document.getElementById('btn-page-next');
+        const btnLast  = document.getElementById('btn-page-last');
 
-        if (Number(s.is_current) === 1 || s.shutdown_type === 'active') {
-            statusBadge = '<span class="badge badge-success">🟢 Running</span>';
-            shutdownCol = '<span style="color:var(--success); font-weight:600;">Active Now</span>';
-            typeBadge = '<span class="badge badge-success">Turned ON</span>';
-        } else if (s.shutdown_type === 'shutdown_dirty') {
-            statusBadge = '<span class="badge badge-danger">💥 Crash / Cut</span>';
-            typeBadge = '<span class="badge badge-danger">Unexpected Power Loss</span>';
-        } else if (s.shutdown_type === 'offline_timeout') {
-            statusBadge = '<span class="badge badge-warning">🔴 Offline</span>';
-            typeBadge = '<span class="badge badge-warning">Heartbeat Stopped</span>';
-        } else if (s.shutdown_type === 'shutdown_requested') {
-            statusBadge = '<span class="badge badge-info">⏹️ Turned OFF</span>';
-            typeBadge = '<span class="badge badge-info">User Shutdown / Restart</span>';
+        if (pagination.total_records === 0) {
+            infoEl.textContent = 'Showing 0 - 0 of 0 sessions';
+            displayEl.textContent = 'Page 1 of 1';
+            btnFirst.disabled = true;
+            btnPrev.disabled  = true;
+            btnNext.disabled  = true;
+            btnLast.disabled  = true;
         } else {
-            statusBadge = '<span class="badge">⏹️ Turned OFF</span>';
-            typeBadge = '<span class="badge">Clean OS Shutdown</span>';
+            infoEl.textContent = `Showing ${pagination.start_index} - ${pagination.end_index} of ${pagination.total_records} sessions`;
+            displayEl.textContent = `Page ${pagination.page} of ${pagination.total_pages}`;
+            btnFirst.disabled = !pagination.has_prev;
+            btnPrev.disabled  = !pagination.has_prev;
+            btnNext.disabled  = !pagination.has_next;
+            btnLast.disabled  = !pagination.has_next;
         }
-
-        html += `
-            <tr>
-                <td>
-                    <span class="pc-tag" onclick="selectPcFilter('${escapeJs(s.pc_name)}')">
-                        🖥️ ${escapeHtml(s.pc_name)}
-                    </span>
-                </td>
-                <td>${statusBadge}</td>
-                <td class="font-mono">${escapeHtml(s.boot_time)}</td>
-                <td class="font-mono">${shutdownCol}</td>
-                <td class="font-mono"><strong>${escapeHtml(s.duration_formatted)}</strong></td>
-                <td>${typeBadge}</td>
-            </tr>
-        `;
-    });
-
-    tbody.innerHTML = html;
+    }
 }
 
 function formatDuration(sec) {

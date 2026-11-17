@@ -112,7 +112,18 @@
                     <h2>Turned ON &amp; OFF Session History</h2>
                     <p class="section-desc">Exact boot and shutdown logs received from each PC's CLI</p>
                 </div>
-                <span class="badge" id="sessions-badge">0 Sessions</span>
+                <div class="table-header-controls">
+                    <label class="per-page-label">
+                        <span>Show:</span>
+                        <select id="per-page-select" class="per-page-select" title="Rows per page">
+                            <option value="10">10 rows</option>
+                            <option value="20" selected>20 rows</option>
+                            <option value="50">50 rows</option>
+                            <option value="100">100 rows</option>
+                        </select>
+                    </label>
+                    <span class="badge" id="sessions-badge">0 Sessions</span>
+                </div>
             </div>
 
             <div class="table-responsive">
@@ -133,6 +144,18 @@
                         </tr>
                     </tbody>
                 </table>
+            </div>
+
+            <!-- Table Pagination Bar -->
+            <div class="pagination-bar" id="pagination-bar">
+                <div class="pagination-info" id="pagination-info">Showing 0 - 0 of 0 sessions</div>
+                <div class="pagination-controls">
+                    <button id="btn-page-first" class="btn-page" title="First Page" disabled>&laquo; First</button>
+                    <button id="btn-page-prev" class="btn-page" title="Previous Page" disabled>&lsaquo; Prev</button>
+                    <span class="page-display" id="page-display">Page 1 of 1</span>
+                    <button id="btn-page-next" class="btn-page" title="Next Page" disabled>Next &rsaquo;</button>
+                    <button id="btn-page-last" class="btn-page" title="Last Page" disabled>Last &raquo;</button>
+                </div>
             </div>
         </section>
 
